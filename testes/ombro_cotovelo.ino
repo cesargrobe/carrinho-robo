@@ -10,14 +10,21 @@ const int PIN_OMBRO    = 6;
 int angCotovelo = 130;
 int angOmbro    = 40;
 
+const int OMBRO_MIN = 40;
+const int OMBRO_MAX = 165;
+const int COTOVELO_MIN = 40;
+const int COTOVELO_MAX = 140;
+
 void setup() {
   Serial.begin(9600);
 
-  cotovelo.attach(PIN_COTOVELO);
-  ombro.attach(PIN_OMBRO);
-
   cotovelo.write(angCotovelo);
+  cotovelo.attach(PIN_COTOVELO);
+  delay(400);
+
   ombro.write(angOmbro);
+  ombro.attach(PIN_OMBRO);
+  delay(500);
 
   Serial.println("=== CALIBRACAO OMBRO + COTOVELO ===");
   Serial.println("Comandos:");
@@ -25,7 +32,7 @@ void setup() {
   Serial.println("3 / 4 -> Cotovelo + / -");
   Serial.println("q / w -> Ombro +5 / -5");
   Serial.println("e / r -> Cotovelo +5 / -5");
-  Serial.println("m -> voltar para 90/90");
+  Serial.println("m -> voltar para posicao segura 40/130");
   Serial.println("p -> mostrar posicoes");
 }
 
@@ -46,12 +53,12 @@ void loop() {
     if (c == 'r') angCotovelo -= 5;
 
     if (c == 'm') {
-      angOmbro = 90;
-      angCotovelo = 90;
+      voltarParaPosicaoSegura();
+      return;
     }
 
-    angOmbro = constrain(angOmbro, 0, 180);
-    angCotovelo = constrain(angCotovelo, 0, 180);
+    angOmbro = constrain(angOmbro, OMBRO_MIN, OMBRO_MAX);
+    angCotovelo = constrain(angCotovelo, COTOVELO_MIN, COTOVELO_MAX);
 
     ombro.write(angOmbro);
     cotovelo.write(angCotovelo);
@@ -61,4 +68,21 @@ void loop() {
     Serial.print(" | Cotovelo: ");
     Serial.println(angCotovelo);
   }
+}
+
+void voltarParaPosicaoSegura() {
+  // Recolhe primeiro o cotovelo e depois o ombro, sem saltos bruscos.
+  while (angCotovelo != 130) {
+    angCotovelo += angCotovelo < 130 ? 1 : -1;
+    cotovelo.write(angCotovelo);
+    delay(35);
+  }
+
+  while (angOmbro != 40) {
+    angOmbro += angOmbro < 40 ? 1 : -1;
+    ombro.write(angOmbro);
+    delay(35);
+  }
+
+  Serial.println("Posicao segura: Ombro 40 | Cotovelo 130");
 }

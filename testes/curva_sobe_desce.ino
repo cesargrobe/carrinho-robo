@@ -25,6 +25,13 @@ Servo base;
 const int GARRA_ABERTA  = 37;
 const int GARRA_FECHADA = 5;
 
+const int BASE_MIN = 60;
+const int BASE_MAX = 120;
+const int OMBRO_MIN = 40;
+const int OMBRO_MAX = 165;
+const int COTOVELO_MIN = 40;
+const int COTOVELO_MAX = 140;
+
 // =====================================================
 // ESTRUTURA DA POSE
 // =====================================================
@@ -70,12 +77,19 @@ Pose atual = {0, 90, 40, 130, GARRA_ABERTA};
 void setup() {
   Serial.begin(9600);
 
+  // Prepara e energiza uma articulacao por vez para reduzir o pico de corrente.
+  garra.write(atual.garra);
   garra.attach(PIN_GARRA);
+  delay(300);
+  cotovelo.write(atual.cotovelo);
   cotovelo.attach(PIN_COTOVELO);
+  delay(300);
+  ombro.write(atual.ombro);
   ombro.attach(PIN_OMBRO);
+  delay(300);
+  base.write(atual.base);
   base.attach(PIN_BASE);
-
-  aplicarPose(atual);
+  delay(700);
 
   Serial.println("===================================");
   Serial.println(" TESTE CURVA EMPIRICA DO BRACO");
@@ -187,11 +201,40 @@ void loop() {
 void irParaPontoCurva(int indice) {
   if (indice < 0 || indice >= TOTAL_PONTOS) return;
 
-  Serial.print("Indo para h = ");
-  Serial.print(curva[indice].altura);
-  Serial.println(" cm");
+  int indiceAtual = localizarPontoAtual();
 
-  irParaPoseSuave(curva[indice], 25);
+  // Se o braco estiver fora da curva, entra sempre pelo ponto mais alto.
+  if (indiceAtual == -1) {
+    Serial.println("Entrando na curva pelo ponto mais alto...");
+    irParaPoseSuave(curva[0], 35);
+    delay(500);
+    indiceAtual = 0;
+  }
+
+  int passo = indice > indiceAtual ? 1 : -1;
+  while (indiceAtual != indice) {
+    indiceAtual += passo;
+
+    Serial.print("Indo para h = ");
+    Serial.print(curva[indiceAtual].altura);
+    Serial.println(" cm");
+
+    irParaPoseSuave(curva[indiceAtual], 35);
+    delay(500);
+  }
+}
+
+int localizarPontoAtual() {
+  for (int i = 0; i < TOTAL_PONTOS; i++) {
+    if (atual.base == curva[i].base &&
+        atual.ombro == curva[i].ombro &&
+        atual.cotovelo == curva[i].cotovelo &&
+        atual.garra == curva[i].garra) {
+      return i;
+    }
+  }
+
+  return -1;
 }
 
 // =====================================================
@@ -203,7 +246,11 @@ void descerCurva() {
 
   abrirGarra();
 
-  for (int i = 0; i < TOTAL_PONTOS; i++) {
+  // Sempre entra na curva pelo ponto mais alto. Isso evita cortar caminho
+  // desde uma pose baixa ou desconhecida ate um ponto intermediario.
+  irParaPontoCurva(0);
+
+  for (int i = 1; i < TOTAL_PONTOS; i++) {
     Serial.print("Ponto ");
     Serial.print(i + 1);
     Serial.print(" | h = ");
@@ -221,6 +268,13 @@ void subirCurva() {
   Serial.println("Subindo pela curva empirica...");
 
   abrirGarra();
+
+  // A subida deve comecar no ponto mais baixo da curva.
+  if (atual.ombro != curva[TOTAL_PONTOS - 1].ombro ||
+      atual.cotovelo != curva[TOTAL_PONTOS - 1].cotovelo) {
+    Serial.println("Movimento recusado: use 'd' antes de subir.");
+    return;
+  }
 
   for (int i = TOTAL_PONTOS - 1; i >= 0; i--) {
     Serial.print("Ponto ");
@@ -311,10 +365,10 @@ float suavizar(float t) {
 // =====================================================
 
 void aplicarPose(Pose p) {
-  base.write(p.base);
-  ombro.write(p.ombro);
-  cotovelo.write(p.cotovelo);
-  garra.write(p.garra);
+  base.write(constrain(p.base, BASE_MIN, BASE_MAX));
+  ombro.write(constrain(p.ombro, OMBRO_MIN, OMBRO_MAX));
+  cotovelo.write(constrain(p.cotovelo, COTOVELO_MIN, COTOVELO_MAX));
+  garra.write(constrain(p.garra, GARRA_FECHADA, GARRA_ABERTA));
 }
 
 // =====================================================

@@ -27,12 +27,21 @@ int posBase = BASE_CENTRO;
 void setup() {
   Serial.begin(9600);
 
+  // Define os destinos antes de energizar cada servo e conecta-os em etapas.
+  garra.write(GARRA_ABERTA);
   garra.attach(PIN_GARRA);
+  delay(300);
+  cotovelo.write(COTOVELO_SEGURO);
   cotovelo.attach(PIN_COTOVELO);
+  delay(300);
+  ombro.write(OMBRO_SEGURO);
   ombro.attach(PIN_OMBRO);
+  delay(300);
+  base.write(BASE_CENTRO);
   base.attach(PIN_BASE);
+  delay(500);
 
-  posicaoSegura();
+  posBase = BASE_CENTRO;
 
   Serial.println("=== TESTE DE MOVIMENTACAO DA BASE ===");
   Serial.println("Comandos:");

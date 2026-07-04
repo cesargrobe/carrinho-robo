@@ -4,23 +4,27 @@ Servo garra;
 
 const int PIN_GARRA = 4;
 
-int angulo = 45;
+const int GARRA_FECHADA = 5;
+const int GARRA_ABERTA  = 37;
+
+int angulo = GARRA_ABERTA;
 
 void setup() {
   Serial.begin(9600);
 
-  garra.attach(PIN_GARRA);
   garra.write(angulo);
+  garra.attach(PIN_GARRA);
+  delay(500);
 
   Serial.println("=== CALIBRACAO DA GARRA ===");
-  Serial.println("Posicao inicial: 45 graus");
+  Serial.println("Posicao inicial: 37 graus (aberta)");
   Serial.println();
   Serial.println("Comandos:");
   Serial.println("+  aumenta 1 grau");
   Serial.println("-  diminui 1 grau");
   Serial.println("a  aumenta 5 graus");
   Serial.println("d  diminui 5 graus");
-  Serial.println("m  volta para 45 graus");
+  Serial.println("m  volta para 37 graus (aberta)");
   Serial.println("p  mostra angulo atual");
 }
 
@@ -45,7 +49,7 @@ void loop() {
     }
 
     if (c == 'm') {
-      angulo = 45;
+      angulo = GARRA_ABERTA;
     }
 
     if (c == 'p') {
@@ -54,7 +58,7 @@ void loop() {
       return;
     }
 
-    angulo = constrain(angulo, 0, 180);
+    angulo = constrain(angulo, GARRA_FECHADA, GARRA_ABERTA);
 
     garra.write(angulo);
 
