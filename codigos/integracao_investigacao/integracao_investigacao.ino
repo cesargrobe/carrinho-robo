@@ -11,7 +11,7 @@ const byte PIN_COR_S1  = A2;
 const byte PIN_COR_S2  = A3;
 const byte PIN_COR_S3  = A4;
 
-const byte GARRA_FECHADA = 5;
+const byte GARRA_FECHADA = 6;
 const byte GARRA_ABERTA  = 37;
 
 const byte BASE_DIREITA  = 60;
@@ -34,6 +34,10 @@ const unsigned long TIMEOUT_COR_US = 30000UL;
 // Diferenca maxima entre as proporcoes RGB da amostra e da referencia.
 // Comece com 0.18 e ajuste observando os valores mostrados no Serial.
 const float LIMIAR_DISCREPANCIA = 0.18;
+
+// Diferenca minima entre fundo e folha saudavel para uma celula fazer
+// parte da mascara da folha. O valor usa proporcoes RGB normalizadas.
+const float LIMIAR_MASCARA_FOLHA = 0.08;
 
 const byte BASE_VARREDURA_MIN = 70;
 const byte BASE_VARREDURA_MAX = 110;
@@ -93,7 +97,14 @@ const byte TOTAL_PONTOS = sizeof(curva) / sizeof(curva[0]);
 
 Pose atual = POSE_SEGURA;
 bool cicloEmExecucao = false;
-LeituraCor corSaudavel = {0, 0, 0, 0, false};
+bool fundoCalibrado = false;
+bool mapaSaudavelCalibrado = false;
+byte mapaFundoR[TOTAL_PONTOS][TOTAL_COLUNAS];
+byte mapaFundoG[TOTAL_PONTOS][TOTAL_COLUNAS];
+bool mapaFundoValido[TOTAL_PONTOS][TOTAL_COLUNAS];
+byte mapaSaudavelR[TOTAL_PONTOS][TOTAL_COLUNAS];
+byte mapaSaudavelG[TOTAL_PONTOS][TOTAL_COLUNAS];
+bool mascaraFolha[TOTAL_PONTOS][TOTAL_COLUNAS];
 bool mapaSuspeito[TOTAL_PONTOS][TOTAL_COLUNAS];
 bool mapaVisitado[TOTAL_PONTOS][TOTAL_COLUNAS];
 
@@ -153,8 +164,12 @@ void loop() {
       executarCorteManual();
       break;
 
+    case 'b':
+      calibrarFundo();
+      break;
+
     case 'c':
-      calibrarCorSaudavel();
+      calibrarMapaSaudavel();
       break;
 
     case 'l':
@@ -186,8 +201,8 @@ void executarTesteCompleto() {
   Serial.println(F(" TESTE COMPLETO: VARREDURA, LEITURA E CORTE"));
   Serial.println(F("========================================"));
 
-  if (!corSaudavel.valida) {
-    Serial.println(F("Teste bloqueado: calibre uma folha saudavel com 'c'."));
+  if (!mapaSaudavelCalibrado) {
+    Serial.println(F("Teste bloqueado: calibre o fundo com 'b' e a folha com 'c'."));
     return;
   }
 
@@ -200,8 +215,8 @@ void executarTesteCompleto() {
 }
 
 void executarInvestigacaoAutomatica() {
-  if (!corSaudavel.valida) {
-    Serial.println(F("Investigacao bloqueada: calibre primeiro com o comando 'c'."));
+  if (!mapaSaudavelCalibrado) {
+    Serial.println(F("Investigacao bloqueada: use 'b' sem folha e depois 'c' com folha saudavel."));
     return;
   }
 
@@ -238,7 +253,12 @@ void executarInvestigacaoAutomatica() {
       Serial.print(F(" cm | base: "));
       Serial.println(destino.base);
 
-      mapaSuspeito[linha][coluna] = confirmarDiscrepancia();
+      if (mascaraFolha[linha][coluna]) {
+        mapaSuspeito[linha][coluna] = confirmarDiscrepancia(linha, coluna);
+      } else {
+        mapaSuspeito[linha][coluna] = false;
+        Serial.println(F("Celula fora da mascara da folha."));
+      }
     }
   }
 
@@ -390,51 +410,132 @@ void executarCorteManual() {
   moverGarra(GARRA_ABERTA);
 }
 
-void calibrarCorSaudavel() {
-  Serial.println(F("Calibrando com a folha saudavel..."));
-  Serial.println(F("Mantenha a folha e a iluminacao paradas."));
-  delay(1000);
+void calibrarFundo() {
+  Serial.println(F("=== CALIBRACAO DO FUNDO ==="));
+  Serial.println(F("Retire a folha e mantenha suporte e iluminacao parados."));
+  fundoCalibrado = false;
+  mapaSaudavelCalibrado = false;
+  executarVarreduraCalibracao(true);
+}
 
-  LeituraCor acumulada = {0, 0, 0, 0, false};
-  byte validas = 0;
-
-  for (byte i = 0; i < 5; i++) {
-    LeituraCor leitura = lerCor();
-    if (leitura.valida) {
-      acumulada.vermelho += leitura.vermelho;
-      acumulada.verde += leitura.verde;
-      acumulada.azul += leitura.azul;
-      validas++;
-    }
-    delay(150);
-  }
-
-  if (validas < 3) {
-    Serial.println(F("Falha na calibracao: sinal insuficiente do sensor."));
-    corSaudavel.valida = false;
+void calibrarMapaSaudavel() {
+  if (!fundoCalibrado) {
+    Serial.println(F("Calibracao bloqueada: primeiro retire a folha e envie 'b'."));
     return;
   }
 
-  corSaudavel.vermelho = acumulada.vermelho / validas;
-  corSaudavel.verde = acumulada.verde / validas;
-  corSaudavel.azul = acumulada.azul / validas;
-  corSaudavel.total = corSaudavel.vermelho +
-                      corSaudavel.verde +
-                      corSaudavel.azul;
-  corSaudavel.valida = corSaudavel.total > 0;
-
-  Serial.println(F("Referencia saudavel registrada:"));
-  mostrarLeituraCor(corSaudavel);
+  Serial.println(F("=== CALIBRACAO DO MAPA SAUDAVEL ==="));
+  Serial.println(F("Coloque a folha saudavel no gabarito e nao altere a iluminacao."));
+  mapaSaudavelCalibrado = false;
+  executarVarreduraCalibracao(false);
 }
 
-bool confirmarDiscrepancia() {
+void executarVarreduraCalibracao(bool registrarFundo) {
+  cicloEmExecucao = true;
+  retornarSeguro();
+
+  byte colunaAtual = TOTAL_COLUNAS - 1;
+  byte leiturasValidas = 0;
+  byte celulasNaMascara = 0;
+
+  Pose destino = curva[0];
+  destino.base = anguloDaColuna(colunaAtual);
+  irParaPoseSuave(destino, TEMPO_NORMAL_MS);
+
+  for (byte linha = 0; linha < TOTAL_PONTOS; linha++) {
+    destino = curva[linha];
+    destino.base = anguloDaColuna(colunaAtual);
+    irParaPoseSuave(destino, TEMPO_CURVA_MS);
+
+    bool esquerdaParaDireita = (linha % 2) == 1;
+    int inicio = esquerdaParaDireita ? 0 : TOTAL_COLUNAS - 1;
+    int fim = esquerdaParaDireita ? TOTAL_COLUNAS : -1;
+    int passo = esquerdaParaDireita ? 1 : -1;
+
+    for (int coluna = inicio; coluna != fim; coluna += passo) {
+      destino = curva[linha];
+      destino.base = anguloDaColuna(coluna);
+      irParaPoseSuave(destino, TEMPO_CURVA_MS);
+      colunaAtual = coluna;
+      delay(250);
+
+      byte vermelho;
+      byte verde;
+      bool valida = lerCorNormalizadaMedia(vermelho, verde);
+
+      Serial.print(F("Mapa ["));
+      Serial.print(linha);
+      Serial.print(F("]["));
+      Serial.print(coluna);
+      Serial.print(F("] -> "));
+
+      if (!valida) {
+        Serial.println(F("leitura invalida"));
+        if (registrarFundo) {
+          mapaFundoValido[linha][coluna] = false;
+        } else {
+          mascaraFolha[linha][coluna] = false;
+        }
+        continue;
+      }
+
+      leiturasValidas++;
+      Serial.print(F("R: "));
+      Serial.print(vermelho);
+      Serial.print(F(" | G: "));
+      Serial.println(verde);
+
+      if (registrarFundo) {
+        mapaFundoR[linha][coluna] = vermelho;
+        mapaFundoG[linha][coluna] = verde;
+        mapaFundoValido[linha][coluna] = true;
+      } else {
+        mapaSaudavelR[linha][coluna] = vermelho;
+        mapaSaudavelG[linha][coluna] = verde;
+
+        float diferencaFundo = diferencaNormalizada(
+            vermelho, verde,
+            mapaFundoR[linha][coluna], mapaFundoG[linha][coluna]);
+
+        mascaraFolha[linha][coluna] =
+            mapaFundoValido[linha][coluna] &&
+            diferencaFundo >= LIMIAR_MASCARA_FOLHA;
+
+        if (mascaraFolha[linha][coluna]) celulasNaMascara++;
+      }
+    }
+  }
+
+  recolherDaLinha(TOTAL_PONTOS - 1);
+
+  byte minimoLeituras = (TOTAL_PONTOS * TOTAL_COLUNAS) / 2;
+  if (leiturasValidas < minimoLeituras) {
+    Serial.println(F("Calibracao rejeitada: poucas leituras validas."));
+  } else if (registrarFundo) {
+    fundoCalibrado = true;
+    Serial.println(F("Mapa do fundo registrado."));
+  } else if (celulasNaMascara == 0) {
+    Serial.println(F("Calibracao rejeitada: nenhuma celula de folha encontrada."));
+  } else {
+    mapaSaudavelCalibrado = true;
+    Serial.print(F("Mapa saudavel registrado. Celulas da folha: "));
+    Serial.print(celulasNaMascara);
+    Serial.print(F("/"));
+    Serial.println(TOTAL_PONTOS * TOTAL_COLUNAS);
+  }
+
+  cicloEmExecucao = false;
+}
+
+bool confirmarDiscrepancia(byte linha, byte coluna) {
   byte suspeitas = 0;
 
   for (byte i = 0; i < LEITURAS_CONFIRMACAO; i++) {
     LeituraCor leitura = lerCor();
     mostrarLeituraCor(leitura);
 
-    if (leitura.valida && corDiferenteDaReferencia(leitura)) {
+    if (leitura.valida &&
+        corDiferenteDaReferencia(leitura, linha, coluna)) {
       suspeitas++;
       Serial.println(F("Leitura suspeita."));
     } else {
@@ -452,28 +553,64 @@ bool confirmarDiscrepancia() {
   return suspeitas >= SUSPEITAS_NECESSARIAS;
 }
 
-bool corDiferenteDaReferencia(LeituraCor leitura) {
-  if (!leitura.valida || !corSaudavel.valida) return false;
+bool corDiferenteDaReferencia(LeituraCor leitura,
+                              byte linha,
+                              byte coluna) {
+  if (!leitura.valida || !mapaSaudavelCalibrado ||
+      !mascaraFolha[linha][coluna]) return false;
 
-  float vermelhoAtual = leitura.vermelho / leitura.total;
-  float verdeAtual = leitura.verde / leitura.total;
-  float azulAtual = leitura.azul / leitura.total;
+  byte vermelhoAtual = normalizarCanal(leitura.vermelho, leitura.total);
+  byte verdeAtual = normalizarCanal(leitura.verde, leitura.total);
 
-  float vermelhoReferencia = corSaudavel.vermelho / corSaudavel.total;
-  float verdeReferencia = corSaudavel.verde / corSaudavel.total;
-  float azulReferencia = corSaudavel.azul / corSaudavel.total;
-
-  float diferencaVermelho = abs(vermelhoAtual - vermelhoReferencia);
-  float diferencaVerde = abs(verdeAtual - verdeReferencia);
-  float diferencaAzul = abs(azulAtual - azulReferencia);
-
-  float maiorDiferenca = max(diferencaVermelho,
-                             max(diferencaVerde, diferencaAzul));
+  float maiorDiferenca = diferencaNormalizada(
+      vermelhoAtual, verdeAtual,
+      mapaSaudavelR[linha][coluna], mapaSaudavelG[linha][coluna]);
 
   Serial.print(F("Discrepancia: "));
   Serial.println(maiorDiferenca, 3);
 
   return maiorDiferenca >= LIMIAR_DISCREPANCIA;
+}
+
+bool lerCorNormalizadaMedia(byte &vermelho, byte &verde) {
+  unsigned int somaVermelho = 0;
+  unsigned int somaVerde = 0;
+  byte validas = 0;
+
+  for (byte i = 0; i < LEITURAS_CONFIRMACAO; i++) {
+    LeituraCor leitura = lerCor();
+    if (leitura.valida) {
+      somaVermelho += normalizarCanal(leitura.vermelho, leitura.total);
+      somaVerde += normalizarCanal(leitura.verde, leitura.total);
+      validas++;
+    }
+    delay(100);
+  }
+
+  if (validas < SUSPEITAS_NECESSARIAS) return false;
+
+  vermelho = somaVermelho / validas;
+  verde = somaVerde / validas;
+  return true;
+}
+
+byte normalizarCanal(float canal, float total) {
+  if (total <= 0) return 0;
+  return constrain((int)(255.0 * canal / total + 0.5), 0, 255);
+}
+
+float diferencaNormalizada(byte vermelhoA, byte verdeA,
+                            byte vermelhoB, byte verdeB) {
+  int azulA = constrain(255 - vermelhoA - verdeA, 0, 255);
+  int azulB = constrain(255 - vermelhoB - verdeB, 0, 255);
+
+  int diferencaVermelho = abs((int)vermelhoA - vermelhoB);
+  int diferencaVerde = abs((int)verdeA - verdeB);
+  int diferencaAzul = abs(azulA - azulB);
+  int maiorDiferenca = max(diferencaVermelho,
+                           max(diferencaVerde, diferencaAzul));
+
+  return maiorDiferenca / 255.0;
 }
 
 LeituraCor lerCor() {
@@ -547,7 +684,7 @@ void moverParaPontoCurva(int destino) {
   }
 
   mostrarPose();
-  Serial.println(F("Posicione uma folha saudavel diante do sensor e envie 'c'."));
+  Serial.println(F("Para calibrar: use 'b' sem folha e depois 'c' com a folha no gabarito."));
 }
 
 void executarVarredura() {
@@ -661,7 +798,8 @@ void mostrarPose() {
 void imprimirAjuda() {
   Serial.println(F("=== INVESTIGACAO SELETIVA POR COR ==="));
   Serial.println(F("1..9 - posicionar o braco para calibracao"));
-  Serial.println(F("c - registrar uma folha saudavel como referencia"));
+  Serial.println(F("b - varrer e registrar o fundo sem folha"));
+  Serial.println(F("c - varrer a folha saudavel e criar a mascara"));
   Serial.println(F("l - fazer uma leitura RGB sem movimentar o braco"));
   Serial.println(F("i - investigar e cortar se confirmar discrepancia"));
   Serial.println(F("t - teste completo de varredura, leitura e corte"));

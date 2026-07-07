@@ -63,8 +63,8 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 
 | Componente | Pino Arduino |
 | ---------- | ------------ |
-| TRIG       | D2           |
-| ECHO       | D3           |
+| TRIG       | D13          |
+| ECHO       | D2           |
 
 ### Braço Robótico
 
@@ -80,11 +80,22 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 | L298N | Pino Arduino |
 | ----- | ------------ |
 | IN1   | D8           |
-| ENA   | D9           |
+| ENA   | D3           |
 | IN2   | D10          |
 | ENB   | D11          |
 | IN3   | D12          |
 | IN4   | A5           |
+
+### Compatibilidade entre servos e PWM dos motores
+
+O TRIG do HC-SR04 foi transferido de D3 para D13 e o ENA da ponte H foi
+transferido de D9 para D3. Essa alteração foi necessária porque, no Arduino
+Uno, a biblioteca `Servo` utiliza o Timer1 e interfere no PWM (`analogWrite`)
+dos pinos D9 e D10.
+
+Com ENA em D3 e ENB em D11, os dois canais da L298N permanecem em pinos PWM
+controlados pelo Timer2, mesmo durante o funcionamento dos quatro servos. O
+pino D13 atende normalmente ao pulso digital de disparo do HC-SR04.
 
 ### Sensor de Cor TCS230/TCS3200
 
@@ -96,6 +107,38 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 | S2     | A3           |
 | S3     | A4           |
 
+### Iluminação do sensor de cor
+
+O módulo TCS230/TCS3200 utilizado no projeto possui quatro LEDs brancos
+alimentados diretamente pelo VCC, sem pino ou jumper para controle de
+intensidade. Os sinais S0/S1 podem colocar o circuito sensor em modo de baixo
+consumo e o sinal OE pode desativar sua saída, mas essas funções não apagam os
+LEDs do módulo.
+
+Por esse motivo, os LEDs permanecerão ligados durante o funcionamento. Essa
+iluminação constante também será considerada parte das condições de calibração
+e leitura das cores. Não será realizada modificação física no módulo para
+controlar os LEDs.
+
+### Mapa saudável e máscara da folha
+
+A investigação utiliza uma região predefinida de 9 × 9 células. Antes da
+comparação são realizadas duas varreduras, mantendo suporte, distância e
+iluminação fixos:
+
+1. o comando `b` registra o fundo sem a folha;
+2. o comando `c` registra uma folha saudável posicionada no gabarito.
+
+O programa compara as duas varreduras e cria automaticamente uma máscara. Uma
+célula somente pertence à máscara quando sua cor se diferencia do fundo acima
+do limiar configurado. Assim, o suporte e as regiões externas à folha não são
+classificados como doença. Durante a investigação, cada célula válida é
+comparada com a mesma posição do mapa saudável, preservando as variações
+naturais de cor existentes ao longo da folha.
+
+Para que a comparação espacial seja válida, as folhas devem ser posicionadas
+no mesmo gabarito e com orientação, distância e iluminação constantes.
+
 ## 6. Calibração do Braço Robótico
 
 ### Garra
@@ -103,8 +146,17 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 | Posição | Ângulo |
 | ------- | -----: |
 | Aberta  |    37° |
-| Fechada |     5° |
+| Fechada |     6° |
 | Inicial |    37° |
+
+### Teste de fechamento rápido
+
+A calibração mecânica atual utiliza a garra aberta em 37° e fechada em 6°.
+No teste rápido, o comando é enviado diretamente ao servo, sem interpolação,
+com intervalo de 350 ms entre fechar e abrir. Em uma série preliminar de 10
+tentativas, o mecanismo realizou 8 cortes, correspondendo a 80% de sucesso.
+Esse resultado registra a configuração atual, mas ainda deve ser repetido com
+mais amostras antes de ser tratado como taxa definitiva de desempenho.
 
 ### Base
 
