@@ -63,8 +63,8 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 
 | Componente | Pino Arduino |
 | ---------- | ------------ |
-| TRIG       | D2           |
-| ECHO       | D3           |
+| TRIG       | D13          |
+| ECHO       | D2           |
 
 ### Braço Robótico
 
@@ -80,11 +80,22 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 | L298N | Pino Arduino |
 | ----- | ------------ |
 | IN1   | D8           |
-| ENA   | D9           |
+| ENA   | D3           |
 | IN2   | D10          |
 | ENB   | D11          |
 | IN3   | D12          |
 | IN4   | A5           |
+
+### Compatibilidade entre servos e PWM dos motores
+
+O TRIG do HC-SR04 foi transferido de D3 para D13 e o ENA da ponte H foi
+transferido de D9 para D3. Essa alteração foi necessária porque, no Arduino
+Uno, a biblioteca `Servo` utiliza o Timer1 e interfere no PWM (`analogWrite`)
+dos pinos D9 e D10.
+
+Com ENA em D3 e ENB em D11, os dois canais da L298N permanecem em pinos PWM
+controlados pelo Timer2, mesmo durante o funcionamento dos quatro servos. O
+pino D13 atende normalmente ao pulso digital de disparo do HC-SR04.
 
 ### Sensor de Cor TCS230/TCS3200
 
@@ -96,6 +107,69 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 | S2     | A3           |
 | S3     | A4           |
 
+### Iluminação do sensor de cor
+
+O módulo TCS230/TCS3200 utilizado no projeto possui quatro LEDs brancos
+alimentados diretamente pelo VCC, sem pino ou jumper para controle de
+intensidade. Os sinais S0/S1 podem colocar o circuito sensor em modo de baixo
+consumo e o sinal OE pode desativar sua saída, mas essas funções não apagam os
+LEDs do módulo.
+
+Por esse motivo, os LEDs permanecerão ligados durante o funcionamento. Essa
+iluminação constante também será considerada parte das condições de calibração
+e leitura das cores. Não será realizada modificação física no módulo para
+controlar os LEDs.
+
+### Mapa saudável e máscara da folha
+
+A investigação de uma folha utiliza uma região predefinida de 6 × 6 células,
+com margem ao redor de uma folha de até aproximadamente 5 cm de largura por
+8 cm de comprimento. As linhas correspondem às alturas de 15, 13, 11, 9, 7 e
+5 cm, enquanto as colunas usam a base entre 80° e 100°, em passos de 4°. Os
+pontos superiores da curva
+empírica continuam sendo usados somente como trajetória segura de entrada e
+não recebem leituras. Antes da
+comparação são realizadas duas varreduras, mantendo suporte, distância e
+iluminação fixos:
+
+1. o comando `b` registra o fundo sem a folha;
+2. o comando `c` registra uma folha saudável posicionada no gabarito.
+
+O mapa do fundo é salvo na EEPROM do Arduino. Assim, ele permanece disponível
+depois de desligar a placa ou carregar uma nova versão do programa. Na
+inicialização, o código verifica assinatura, versão, dimensões da grade e
+checksum antes de aceitar os dados. O comando `B` maiúsculo apaga a referência
+persistente. Se a geometria, o suporte ou a iluminação mudarem, o fundo deverá
+ser calibrado novamente com `b`.
+
+O programa compara as duas varreduras e cria automaticamente uma máscara. Uma
+célula somente pertence à máscara quando sua cor se diferencia do fundo acima
+do limiar configurado. Assim, o suporte e as regiões externas à folha não são
+classificados como doença. Durante a investigação, cada célula válida é
+comparada com a mesma posição do mapa saudável, preservando as variações
+naturais de cor existentes ao longo da folha.
+
+O limiar inicial da máscara foi ajustado experimentalmente para `0,015`. Nas
+primeiras medições, o fundo apresentou variações de até aproximadamente
+`0,008`, enquanto a presença da folha produziu diferenças de até `0,024`. O
+valor adotado fica acima do ruído observado, mas deve ser confirmado repetindo
+a calibração sem alterar o gabarito ou a iluminação.
+
+Para que a comparação espacial seja válida, as folhas devem ser posicionadas
+no mesmo gabarito e com orientação, distância e iluminação constantes.
+O pecíolo — pequena haste que liga a lâmina da folha ao caule ou ramo — deve
+ficar acima da primeira linha da grade, correspondente a 15 cm. Como essa
+região está fora da área lida, o programa calcula o centro das células da
+borda superior da folha e extrapola uma pose inicial de 16 cm. Essa pose usa
+ângulos interpolados entre os pontos empíricos de 15 e 17,5 cm e deve ser
+ajustada fisicamente antes de se tornar a posição definitiva de corte.
+
+Folhas próximas ou sobrepostas não podem ser separadas de forma confiável pelo
+TCS230/TCS3200, pois ele é um sensor pontual e não produz imagens. A estratégia
+prevista para uma planta com várias folhas é realizar primeiro uma varredura
+ampla para localizar regiões e, depois, aplicar a grade fina em cada região
+isolada. A calibração espacial atual trabalha com uma folha por vez.
+
 ## 6. Calibração do Braço Robótico
 
 ### Garra
@@ -103,8 +177,17 @@ Desenvolver um veículo robótico terrestre em escala reduzida, capaz de se desl
 | Posição | Ângulo |
 | ------- | -----: |
 | Aberta  |    37° |
-| Fechada |     5° |
+| Fechada |     6° |
 | Inicial |    37° |
+
+### Teste de fechamento rápido
+
+A calibração mecânica atual utiliza a garra aberta em 37° e fechada em 6°.
+No teste rápido, o comando é enviado diretamente ao servo, sem interpolação,
+com intervalo de 350 ms entre fechar e abrir. Em uma série preliminar de 10
+tentativas, o mecanismo realizou 8 cortes, correspondendo a 80% de sucesso.
+Esse resultado registra a configuração atual, mas ainda deve ser repetido com
+mais amostras antes de ser tratado como taxa definitiva de desempenho.
 
 ### Base
 
@@ -154,6 +237,30 @@ O funcionamento geral do sistema será organizado da seguinte forma:
 7. Se houver suspeita, a garra simula o corte ou remoção mecânica;
 8. O braço retorna à posição inicial;
 9. O carrinho continua o percurso.
+
+### Limite físico de alcance e aproximação para corte
+
+Os testes finais mostraram que a garra consegue realizar o corte a uma
+distância máxima de aproximadamente 11,5 cm, medida pelo sensor ultrassônico,
+quando o mecanismo está a cerca de 15,5 cm de altura. O pecíolo identificado
+fica fora desse alcance quando o carrinho permanece na posição usada para a
+investigação.
+
+Para respeitar os limites mecânicos do ombro e do cotovelo, o código não força
+o braço além da curva segura. Antes de posicionar a garra para o corte, o
+carrinho executa um único pulso de aproximação com PWM 80 durante 250 ms, para
+os motores e aguarda 500 ms para estabilização. O comando `j` testa somente
+essa aproximação; o comando `k` executa o pulso uma vez, quando necessário, e
+depois posiciona o braço no candidato a pecíolo para ajuste.
+
+O comando `J` maiúsculo executa um único pulso manual de ré. A ré não é chamada
+automaticamente por nenhuma rotina e possui constantes próprias de PWM e
+duração para calibração independente.
+
+Essa aproximação é uma solução funcional para o protótipo atual. Como os
+motores DC não possuem encoders, ela não constitui navegação de precisão. Uma
+versão futura deverá utilizar encoders, controle independente das rodas ou uma
+estrutura mecânica com maior alcance.
 
 ## 9. Organização Sugerida do Repositório
 
