@@ -1,5 +1,5 @@
-// Teste conservador dos dois motores DC com a ponte H L298N.
-// Nao usa Servo.h, portanto os PWM D9 e D11 ficam disponiveis.
+// Calibracao independente dos dois motores DC com a ponte H L298N.
+// Permite encontrar um PWM diferente para cada motor.
 
 const byte PIN_IN1 = 8;
 const byte PIN_ENA = 3;
@@ -8,12 +8,14 @@ const byte PIN_ENB = 11;
 const byte PIN_IN3 = 12;
 const byte PIN_IN4 = A5;
 
-const byte PWM_INICIAL = 80;
+const byte PWM_INICIAL_A = 70;
+const byte PWM_INICIAL_B = 80;
 const byte PWM_MINIMO = 50;
 const byte PWM_MAXIMO_TESTE = 130;
-const byte PASSO_PWM = 10;
+const byte PASSO_PWM = 5;
 
-byte velocidade = PWM_INICIAL;
+byte pwmMotorA = PWM_INICIAL_A;
+byte pwmMotorB = PWM_INICIAL_B;
 
 void setup() {
   Serial.begin(9600);
@@ -27,6 +29,7 @@ void setup() {
 
   pararMotores();
   imprimirAjuda();
+  mostrarPWM();
 }
 
 void loop() {
@@ -35,105 +38,79 @@ void loop() {
   char comando = Serial.read();
 
   switch (comando) {
-    case 'f':
-      moverFrente();
-      break;
+    case '1': testarMotorA(true);  break;
+    case '2': testarMotorA(false); break;
+    case '3': testarMotorB(true);  break;
+    case '4': testarMotorB(false); break;
 
-    case 't':
-      moverTras();
-      break;
+    case 'f': moverFrente();       break;
+    case 't': moverTras();         break;
+    case 'e': girarEsquerda();     break;
+    case 'd': girarDireita();      break;
 
-    case 'e':
-      girarEsquerda();
-      break;
+    case 'A': ajustarMotorA(PASSO_PWM);  break;
+    case 'a': ajustarMotorA(-PASSO_PWM); break;
+    case 'B': ajustarMotorB(PASSO_PWM);  break;
+    case 'b': ajustarMotorB(-PASSO_PWM); break;
 
-    case 'd':
-      girarDireita();
-      break;
-
-    case '1':
-      testarMotorA(true);
-      break;
-
-    case '2':
-      testarMotorA(false);
-      break;
-
-    case '3':
-      testarMotorB(true);
-      break;
-
-    case '4':
-      testarMotorB(false);
-      break;
-
-    case '+':
-      ajustarVelocidade(PASSO_PWM);
-      break;
-
-    case '-':
-      ajustarVelocidade(-PASSO_PWM);
-      break;
-
-    case 'p':
-      pararMotores();
-      break;
-
-    case 'v':
-      mostrarVelocidade();
-      break;
-
-    case 'h':
-      imprimirAjuda();
-      break;
+    case 'p': pararMotores();      break;
+    case 'v': mostrarPWM();        break;
+    case 'h': imprimirAjuda();     break;
   }
 }
 
 void moverFrente() {
   Serial.println(F("Dois motores para FRENTE"));
+
+  // Sentidos validados no codigo principal do projeto.
   configurarMotorA(true);
   configurarMotorB(true);
-  aplicarVelocidade(velocidade, velocidade);
+  aplicarPWM();
 }
 
 void moverTras() {
   Serial.println(F("Dois motores para TRAS"));
   configurarMotorA(false);
   configurarMotorB(false);
-  aplicarVelocidade(velocidade, velocidade);
+  aplicarPWM();
 }
 
 void girarEsquerda() {
-  Serial.println(F("Girando para ESQUERDA"));
+  Serial.println(F("Giro no proprio eixo: sentido 1"));
   configurarMotorA(false);
   configurarMotorB(true);
-  aplicarVelocidade(velocidade, velocidade);
+  aplicarPWM();
 }
 
 void girarDireita() {
-  Serial.println(F("Girando para DIREITA"));
+  Serial.println(F("Giro no proprio eixo: sentido 2"));
   configurarMotorA(true);
   configurarMotorB(false);
-  aplicarVelocidade(velocidade, velocidade);
+  aplicarPWM();
 }
 
 void testarMotorA(bool frente) {
   pararMotores();
   configurarMotorA(frente);
-  analogWrite(PIN_ENA, velocidade);
-  Serial.println(frente ? F("Motor A: sentido 1") : F("Motor A: sentido 2"));
+  analogWrite(PIN_ENA, pwmMotorA);
+  Serial.println(frente ? F("Somente motor A: frente")
+                         : F("Somente motor A: re"));
+  mostrarPWM();
 }
 
 void testarMotorB(bool frente) {
   pararMotores();
   configurarMotorB(frente);
-  analogWrite(PIN_ENB, velocidade);
-  Serial.println(frente ? F("Motor B: sentido 1") : F("Motor B: sentido 2"));
+  analogWrite(PIN_ENB, pwmMotorB);
+  Serial.println(frente ? F("Somente motor B: frente")
+                         : F("Somente motor B: re"));
+  mostrarPWM();
 }
 
 void configurarMotorA(bool frente) {
-  digitalWrite(PIN_IN1, frente ? HIGH : LOW);
-  digitalWrite(PIN_IN2, frente ? LOW : HIGH);
+  // Motor A esta montado no sentido oposto ao motor B.
+  digitalWrite(PIN_IN1, frente ? LOW : HIGH);
+  digitalWrite(PIN_IN2, frente ? HIGH : LOW);
 }
 
 void configurarMotorB(bool frente) {
@@ -141,16 +118,24 @@ void configurarMotorB(bool frente) {
   digitalWrite(PIN_IN4, frente ? LOW : HIGH);
 }
 
-void aplicarVelocidade(byte pwmA, byte pwmB) {
-  analogWrite(PIN_ENA, constrain(pwmA, 0, PWM_MAXIMO_TESTE));
-  analogWrite(PIN_ENB, constrain(pwmB, 0, PWM_MAXIMO_TESTE));
+void aplicarPWM() {
+  analogWrite(PIN_ENA, pwmMotorA);
+  analogWrite(PIN_ENB, pwmMotorB);
+  mostrarPWM();
 }
 
-void ajustarVelocidade(int alteracao) {
-  velocidade = constrain((int)velocidade + alteracao,
-                         PWM_MINIMO, PWM_MAXIMO_TESTE);
-  aplicarVelocidade(velocidade, velocidade);
-  mostrarVelocidade();
+void ajustarMotorA(int alteracao) {
+  pwmMotorA = constrain((int)pwmMotorA + alteracao,
+                        PWM_MINIMO, PWM_MAXIMO_TESTE);
+  Serial.println(F("PWM do motor A ajustado. Repita o comando de movimento."));
+  mostrarPWM();
+}
+
+void ajustarMotorB(int alteracao) {
+  pwmMotorB = constrain((int)pwmMotorB + alteracao,
+                        PWM_MINIMO, PWM_MAXIMO_TESTE);
+  Serial.println(F("PWM do motor B ajustado. Repita o comando de movimento."));
+  mostrarPWM();
 }
 
 void pararMotores() {
@@ -163,20 +148,22 @@ void pararMotores() {
   Serial.println(F("Motores parados"));
 }
 
-void mostrarVelocidade() {
-  Serial.print(F("PWM atual: "));
-  Serial.print(velocidade);
-  Serial.print(F("/255 | limite de teste: "));
-  Serial.println(PWM_MAXIMO_TESTE);
+void mostrarPWM() {
+  Serial.print(F("PWM A: "));
+  Serial.print(pwmMotorA);
+  Serial.print(F(" | PWM B: "));
+  Serial.println(pwmMotorB);
 }
 
 void imprimirAjuda() {
-  Serial.println(F("=== TESTE L298N ==="));
-  Serial.println(F("1/2 - motor A nos dois sentidos"));
-  Serial.println(F("3/4 - motor B nos dois sentidos"));
-  Serial.println(F("f/t - frente/tras"));
-  Serial.println(F("e/d - girar esquerda/direita"));
-  Serial.println(F("+/- - ajustar PWM"));
+  Serial.println(F("=== CALIBRACAO L298N ==="));
+  Serial.println(F("1/2 - somente motor A, frente/re"));
+  Serial.println(F("3/4 - somente motor B, frente/re"));
+  Serial.println(F("f/t - dois motores, frente/re"));
+  Serial.println(F("e/d - giro nos dois sentidos"));
+  Serial.println(F("A/a - aumentar/diminuir PWM do motor A em 5"));
+  Serial.println(F("B/b - aumentar/diminuir PWM do motor B em 5"));
   Serial.println(F("p - parada imediata"));
-  Serial.println(F("v - mostrar PWM"));
+  Serial.println(F("v - mostrar os dois valores PWM"));
+  Serial.println(F("h - mostrar ajuda"));
 }

@@ -117,6 +117,8 @@ O braço realiza uma varredura em linhas alternadas, formando uma matriz de pont
 
 O mecanismo de corte também foi testado separadamente. A garra fecha, o braço recolhe, eleva e só depois abre, criando um golpe mecânico mais efetivo.
 
+Durante a calibração final medimos um limite físico: a garra corta até aproximadamente 11,5 centímetros de distância, na altura de 15,5 centímetros. Como o pecíolo fica além desse alcance, decidimos não forçar os servos. O carrinho realiza apenas um pulso curto de aproximação, para completamente e só então posiciona o braço. Essa decisão preserva a estrutura e mostra como os testes orientaram o projeto.
+
 Além do código principal, mantivemos programas de teste para motores, ultrassônico, servos, integração completa e golpe de corte. Essa modularização ajudou a localizar falhas sem colocar todo o protótipo em risco.”
 
 ### Mostrar
@@ -234,4 +236,3 @@ Resposta: “Temos códigos e registros de testes individuais, tabela de calibra
 - [ ] Chave ou conector de desligamento imediatamente acessível.
 - [ ] Nenhuma afirmação de eficácia agronômica sem evidência.
 - [ ] Limitações e próximos passos explicados com segurança.
-
