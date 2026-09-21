@@ -131,9 +131,25 @@ struct FundoPersistente {
   unsigned int checksum;
 };
 
+struct MapaSaudavelPersistente {
+  unsigned long assinatura;
+  byte versao;
+  byte linhas;
+  byte colunas;
+  unsigned int checksumFundo;
+  byte vermelho[TOTAL_LINHAS_GRADE][TOTAL_COLUNAS];
+  byte verde[TOTAL_LINHAS_GRADE][TOTAL_COLUNAS];
+  byte mascara[TOTAL_LINHAS_GRADE][TOTAL_COLUNAS];
+  unsigned int checksum;
+};
+
 const unsigned long ASSINATURA_FUNDO = 0x464F4C48UL; // "FOLH"
 const byte VERSAO_FUNDO = 1;
 const int ENDERECO_FUNDO_EEPROM = 0;
+const unsigned long ASSINATURA_MAPA_SAUDAVEL = 0x53415544UL; // "SAUD"
+const byte VERSAO_MAPA_SAUDAVEL = 1;
+const int ENDERECO_MAPA_SAUDAVEL_EEPROM =
+    ENDERECO_FUNDO_EEPROM + sizeof(FundoPersistente);
 
 Servo garra;
 Servo cotovelo;
@@ -217,6 +233,7 @@ void setup() {
   digitalWrite(PIN_COR_S1, LOW);
 
   carregarFundoEEPROM();
+  carregarMapaSaudavelEEPROM();
 
   // Energiza uma articulacao por vez para reduzir o pico de corrente.
   garra.write(atual.garra);
@@ -1199,11 +1216,13 @@ void executarVarreduraCalibracao(bool registrarFundo) {
   } else if (registrarFundo) {
     fundoCalibrado = true;
     salvarFundoEEPROM();
+    apagarMapaSaudavelEEPROM();
     Serial.println(F("Mapa do fundo registrado."));
   } else if (celulasNaMascara == 0) {
     Serial.println(F("Calibracao rejeitada: nenhuma celula de folha encontrada."));
   } else {
     mapaSaudavelCalibrado = true;
+    salvarMapaSaudavelEEPROM();
     Serial.print(F("Mapa saudavel registrado. Celulas da folha: "));
     Serial.print(celulasNaMascara);
     Serial.print(F("/"));
@@ -1227,6 +1246,28 @@ unsigned int calcularChecksumFundo(const FundoPersistente &dados) {
   }
 
   return checksum;
+}
+
+unsigned int calcularChecksumMapaSaudavel(
+    const MapaSaudavelPersistente &dados) {
+  unsigned int checksum =
+      dados.versao + dados.linhas + dados.colunas + dados.checksumFundo;
+
+  for (byte linha = 0; linha < TOTAL_LINHAS_GRADE; linha++) {
+    for (byte coluna = 0; coluna < TOTAL_COLUNAS; coluna++) {
+      checksum = checksum * 31U + dados.vermelho[linha][coluna];
+      checksum = checksum * 31U + dados.verde[linha][coluna];
+      checksum = checksum * 31U + dados.mascara[linha][coluna];
+    }
+  }
+
+  return checksum;
+}
+
+unsigned int checksumFundoAtual() {
+  FundoPersistente dados;
+  EEPROM.get(ENDERECO_FUNDO_EEPROM, dados);
+  return dados.checksum;
 }
 
 void salvarFundoEEPROM() {
@@ -1278,9 +1319,70 @@ void carregarFundoEEPROM() {
   Serial.println(F("Mapa do fundo carregado automaticamente da EEPROM."));
 }
 
+void salvarMapaSaudavelEEPROM() {
+  MapaSaudavelPersistente dados;
+  dados.assinatura = ASSINATURA_MAPA_SAUDAVEL;
+  dados.versao = VERSAO_MAPA_SAUDAVEL;
+  dados.linhas = TOTAL_LINHAS_GRADE;
+  dados.colunas = TOTAL_COLUNAS;
+  dados.checksumFundo = checksumFundoAtual();
+
+  for (byte linha = 0; linha < TOTAL_LINHAS_GRADE; linha++) {
+    for (byte coluna = 0; coluna < TOTAL_COLUNAS; coluna++) {
+      dados.vermelho[linha][coluna] = mapaSaudavelR[linha][coluna];
+      dados.verde[linha][coluna] = mapaSaudavelG[linha][coluna];
+      dados.mascara[linha][coluna] = mascaraFolha[linha][coluna] ? 1 : 0;
+    }
+  }
+
+  dados.checksum = calcularChecksumMapaSaudavel(dados);
+  EEPROM.put(ENDERECO_MAPA_SAUDAVEL_EEPROM, dados);
+  Serial.println(F("Mapa saudavel salvo na EEPROM."));
+}
+
+void carregarMapaSaudavelEEPROM() {
+  mapaSaudavelCalibrado = false;
+  if (!fundoCalibrado) return;
+
+  MapaSaudavelPersistente dados;
+  EEPROM.get(ENDERECO_MAPA_SAUDAVEL_EEPROM, dados);
+
+  bool estruturaValida =
+      dados.assinatura == ASSINATURA_MAPA_SAUDAVEL &&
+      dados.versao == VERSAO_MAPA_SAUDAVEL &&
+      dados.linhas == TOTAL_LINHAS_GRADE &&
+      dados.colunas == TOTAL_COLUNAS &&
+      dados.checksumFundo == checksumFundoAtual() &&
+      dados.checksum == calcularChecksumMapaSaudavel(dados);
+
+  if (!estruturaValida) {
+    Serial.println(F("Nenhum mapa saudavel compativel encontrado na EEPROM."));
+    return;
+  }
+
+  for (byte linha = 0; linha < TOTAL_LINHAS_GRADE; linha++) {
+    for (byte coluna = 0; coluna < TOTAL_COLUNAS; coluna++) {
+      mapaSaudavelR[linha][coluna] = dados.vermelho[linha][coluna];
+      mapaSaudavelG[linha][coluna] = dados.verde[linha][coluna];
+      mascaraFolha[linha][coluna] = dados.mascara[linha][coluna] != 0;
+    }
+  }
+
+  mapaSaudavelCalibrado = true;
+  estimarPecioloPelaMascara();
+  Serial.println(F("Mapa saudavel carregado automaticamente da EEPROM."));
+}
+
+void apagarMapaSaudavelEEPROM() {
+  unsigned long assinaturaVazia = 0;
+  EEPROM.put(ENDERECO_MAPA_SAUDAVEL_EEPROM, assinaturaVazia);
+  mapaSaudavelCalibrado = false;
+}
+
 void apagarFundoEEPROM() {
   unsigned long assinaturaVazia = 0;
   EEPROM.put(ENDERECO_FUNDO_EEPROM, assinaturaVazia);
+  EEPROM.put(ENDERECO_MAPA_SAUDAVEL_EEPROM, assinaturaVazia);
   fundoCalibrado = false;
   mapaSaudavelCalibrado = false;
   Serial.println(F("Fundo persistente apagado. Execute 'b' novamente."));
