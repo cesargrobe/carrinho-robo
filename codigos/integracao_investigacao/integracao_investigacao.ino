@@ -81,15 +81,16 @@ const float LIMIAR_DISCREPANCIA = 0.18;
 // Diferenca minima entre fundo e folha saudavel para uma celula fazer
 // parte da mascara da folha. O valor usa proporcoes RGB normalizadas.
 const float LIMIAR_MASCARA_FOLHA = 0.015;
+const byte MIN_CELULAS_VERMELHAS_CORTE = 4;
 
 // Grade com margem ao redor de uma folha de ate 5 x 8 cm.
-const byte BASE_VARREDURA_MIN = 80;
-const byte BASE_VARREDURA_MAX = 100;
+const byte BASE_VARREDURA_MIN = 78;
+const byte BASE_VARREDURA_MAX = 102;
 const byte PASSO_BASE = 4;
 const byte TOTAL_COLUNAS =
     ((BASE_VARREDURA_MAX - BASE_VARREDURA_MIN) / PASSO_BASE) + 1;
-const byte PRIMEIRO_PONTO_GRADE = 2;  // 15 cm na curva empirica.
-const byte TOTAL_LINHAS_GRADE = 6;   // 15, 13, 11, 9, 7 e 5 cm.
+const byte PRIMEIRO_PONTO_GRADE = 1;  // 17,5 cm na curva empirica.
+const byte TOTAL_LINHAS_GRADE = 7;   // 17,5, 15, 13, 11, 9, 7 e 5 cm.
 const float RAIO_SENSOR_CM = 16.0;
 const float LARGURA_PASSO_CM = 1.12;
 
@@ -170,8 +171,7 @@ const Pose curva[] = {
   {2.5,  BASE_CENTRO, 165, 40,  GARRA_ABERTA}
 };
 
-// Ponto inicial estimado acima da linha 0. Ombro e cotovelo foram
-// interpolados entre as poses empiricas de 17,5 cm e 15 cm.
+// Pose nominal de corte mantida entre as poses empiricas de 17,5 e 15 cm.
 const Pose POSE_PECIOLO_VIRTUAL = {
   16.0, BASE_CENTRO, 109, 111, GARRA_ABERTA
 };
@@ -292,6 +292,10 @@ void loop() {
       calibrarMapaSaudavel();
       break;
 
+    case 'd':
+      executarVarreduraCor(false);
+      break;
+
     case 'l':
       mostrarLeituraCor(lerCor());
       break;
@@ -404,18 +408,64 @@ void executarTesteCompleto() {
   Serial.println(F("========================================"));
 }
 
-void executarInvestigacaoAutomatica() {
-  if (!mapaSaudavelCalibrado) {
-    Serial.println(F("Investigacao bloqueada: use 'b' sem folha e depois 'c' com folha saudavel."));
+char classificarCorAtual(byte vermelho, byte verde, byte fundoR, byte fundoG,
+                        byte referenciaR, byte referenciaG) {
+  int deslocamentoR = (int)vermelho - fundoR;
+  int deslocamentoG = (int)verde - fundoG;
+  float diferencaSaudavel = diferencaNormalizada(
+      vermelho, verde, referenciaR, referenciaG);
+  if (deslocamentoR <= -4 && deslocamentoG >= 4 &&
+      diferencaSaudavel <= 0.030) return 'V';
+  if (deslocamentoR >= 4 && deslocamentoG <= -3 &&
+      diferencaSaudavel >= 0.040) return 'R';
+  return '.';
+}
+
+void executarVarreduraCor(bool permitirCorte) {
+  if (!fundoCalibrado || !mapaSaudavelCalibrado) {
+    Serial.println(F("Varredura bloqueada: calibre 'b' e 'c' primeiro."));
     return;
   }
 
+  unsigned int somaR = 0;
+  unsigned int somaG = 0;
+  byte referencias = 0;
+  for (byte linha = 0; linha < TOTAL_LINHAS_GRADE; linha++) {
+    for (byte coluna = 0; coluna < TOTAL_COLUNAS; coluna++) {
+      if (mascaraFolha[linha][coluna]) {
+        somaR += mapaSaudavelR[linha][coluna];
+        somaG += mapaSaudavelG[linha][coluna];
+        referencias++;
+      }
+    }
+  }
+  if (referencias == 0) {
+    Serial.println(F("Varredura bloqueada: referencia saudavel vazia."));
+    return;
+  }
+
+  byte referenciaR = somaR / referencias;
+  byte referenciaG = somaG / referencias;
+  byte leituraR[TOTAL_LINHAS_GRADE][TOTAL_COLUNAS] = {};
+  byte leituraG[TOTAL_LINHAS_GRADE][TOTAL_COLUNAS] = {};
+  bool leituraValida[TOTAL_LINHAS_GRADE][TOTAL_COLUNAS] = {};
+  unsigned int somaFundoAtualR = 0;
+  unsigned int somaFundoAtualG = 0;
+  byte amostrasFundoAtual = 0;
+  byte minimoFundoR = 255;
+  byte maximoFundoR = 0;
+  byte minimoFundoG = 255;
+  byte maximoFundoG = 0;
+
+  Serial.println(permitirCorte ? F("=== INVESTIGACAO 7x7 ===") :
+                                F("=== DIAGNOSTICO 7x7 SEM CORTE ==="));
+  Serial.print(F("Referencia saudavel media -> R: "));
+  Serial.print(referenciaR);
+  Serial.print(F(" | G: "));
+  Serial.println(referenciaG);
+
   cicloEmExecucao = true;
-  limparMapas();
-
-  Serial.println(F("=== VARREDURA 2D DA AREA ==="));
   retornarSeguro();
-
   byte colunaAtual = TOTAL_COLUNAS - 1;
   moverParaInicioGrade(colunaAtual);
 
@@ -437,46 +487,159 @@ void executarInvestigacaoAutomatica() {
       colunaAtual = coluna;
       delay(250);
 
-      Serial.print(F("Celula -> altura: "));
-      Serial.print(curva[indiceCurva].altura);
-      Serial.print(F(" cm | base: "));
-      Serial.println(destino.base);
-
-      if (mascaraFolha[linha][coluna]) {
-        mapaSuspeito[linha][coluna] = confirmarDiscrepancia(linha, coluna);
-      } else {
-        mapaSuspeito[linha][coluna] = false;
-        Serial.println(F("Celula fora da mascara da folha."));
+      byte vermelho;
+      byte verde;
+      bool valida = lerCorNormalizadaMedia(vermelho, verde);
+      Serial.print(F("Mapa ["));
+      Serial.print(linha);
+      Serial.print(F("]["));
+      Serial.print(coluna);
+      Serial.print(F("] -> "));
+      if (!valida || !mapaFundoValido[linha][coluna]) {
+        Serial.println(F("leitura invalida ou fundo indisponivel"));
+        continue;
       }
+
+      leituraR[linha][coluna] = vermelho;
+      leituraG[linha][coluna] = verde;
+      leituraValida[linha][coluna] = true;
+      if (linha == 0) {
+        somaFundoAtualR += vermelho;
+        somaFundoAtualG += verde;
+        amostrasFundoAtual++;
+        minimoFundoR = min(minimoFundoR, vermelho);
+        maximoFundoR = max(maximoFundoR, vermelho);
+        minimoFundoG = min(minimoFundoG, verde);
+        maximoFundoG = max(maximoFundoG, verde);
+      }
+
+      float diferencaFundo = diferencaNormalizada(
+          vermelho, verde, mapaFundoR[linha][coluna], mapaFundoG[linha][coluna]);
+      float diferencaSaudavel = diferencaNormalizada(
+          vermelho, verde, referenciaR, referenciaG);
+
+      Serial.print(F("R: "));
+      Serial.print(vermelho);
+      Serial.print(F(" | G: "));
+      Serial.print(verde);
+      Serial.print(F(" | Fundo: "));
+      Serial.print(diferencaFundo, 3);
+      Serial.print(F(" | Saudavel: "));
+      Serial.print(diferencaSaudavel, 3);
+      Serial.println();
     }
   }
 
-  RegiaoSuspeita regiao = localizarMaiorRegiao();
+  byte linhaFundoAtual = 0;
+  if (amostrasFundoAtual < TOTAL_COLUNAS ||
+      maximoFundoR - minimoFundoR > 4 ||
+      maximoFundoG - minimoFundoG > 3) {
+    linhaFundoAtual = TOTAL_LINHAS_GRADE - 1;
+    somaFundoAtualR = 0;
+    somaFundoAtualG = 0;
+    amostrasFundoAtual = 0;
+    minimoFundoR = 255;
+    maximoFundoR = 0;
+    minimoFundoG = 255;
+    maximoFundoG = 0;
+    for (byte coluna = 0; coluna < TOTAL_COLUNAS; coluna++) {
+      if (!leituraValida[linhaFundoAtual][coluna]) continue;
+      byte vermelho = leituraR[linhaFundoAtual][coluna];
+      byte verde = leituraG[linhaFundoAtual][coluna];
+      somaFundoAtualR += vermelho;
+      somaFundoAtualG += verde;
+      amostrasFundoAtual++;
+      minimoFundoR = min(minimoFundoR, vermelho);
+      maximoFundoR = max(maximoFundoR, vermelho);
+      minimoFundoG = min(minimoFundoG, verde);
+      maximoFundoG = max(maximoFundoG, verde);
+    }
+  }
+  if (amostrasFundoAtual < TOTAL_COLUNAS ||
+      maximoFundoR - minimoFundoR > 4 ||
+      maximoFundoG - minimoFundoG > 3) {
+    Serial.println(F("Bordas sem fundo uniforme; classificacao cancelada."));
+    recolherDaLinha(TOTAL_LINHAS_GRADE - 1);
+    cicloEmExecucao = false;
+    return;
+  }
 
-  if (regiao.encontrada) {
-    byte linhaCentro = (regiao.somaLinhas + regiao.quantidade / 2) /
-                       regiao.quantidade;
-    byte colunaCentro = (regiao.somaColunas + regiao.quantidade / 2) /
-                        regiao.quantidade;
+  byte fundoAtualR = somaFundoAtualR / amostrasFundoAtual;
+  byte fundoAtualG = somaFundoAtualG / amostrasFundoAtual;
+  byte celulasVerdes = 0;
+  byte celulasVermelhas = 0;
+  limparMapas();
+  Serial.print(F("Fundo atual (linha "));
+  Serial.print(linhaFundoAtual);
+  Serial.print(F(") -> R: "));
+  Serial.print(fundoAtualR);
+  Serial.print(F(" | G: "));
+  Serial.println(fundoAtualG);
+  Serial.println(F("Mapa atual: V = verde saudavel, R = vermelha suspeita, . = indefinido"));
+  for (byte linha = 0; linha < TOTAL_LINHAS_GRADE; linha++) {
+    for (byte coluna = 0; coluna < TOTAL_COLUNAS; coluna++) {
+      if (!leituraValida[linha][coluna]) {
+        Serial.print('?');
+        continue;
+      }
 
-    mostrarRegiao(regiao, linhaCentro, colunaCentro);
-    moverDaUltimaLinhaPara(linhaCentro, colunaCentro);
+      char classe = classificarCorAtual(
+          leituraR[linha][coluna], leituraG[linha][coluna],
+          fundoAtualR, fundoAtualG, referenciaR, referenciaG);
+      mapaSuspeito[linha][coluna] = classe == 'R';
+      Serial.print(classe);
+      if (classe == 'V') {
+        celulasVerdes++;
+      } else if (classe == 'R') {
+        celulasVermelhas++;
+      }
+    }
+    Serial.println();
+  }
+  Serial.print(F("Celulas verdes: "));
+  Serial.print(celulasVerdes);
+  Serial.print(F(" | vermelhas suspeitas: "));
+  Serial.println(celulasVermelhas);
+  if (permitirCorte) {
+    RegiaoSuspeita regiao = localizarMaiorRegiao();
+    if (regiao.encontrada &&
+        regiao.quantidade >= MIN_CELULAS_VERMELHAS_CORTE) {
+      byte linhaCentro = (regiao.somaLinhas + regiao.quantidade / 2) /
+                         regiao.quantidade;
+      byte colunaCentro = (regiao.somaColunas + regiao.quantidade / 2) /
+                          regiao.quantidade;
+      mostrarRegiao(regiao, linhaCentro, colunaCentro);
+      moverDaUltimaLinhaPara(linhaCentro, colunaCentro);
+      delay(250);
 
-    Serial.println(F("Centro da regiao alcancado: efetuando o corte."));
-    moverGarra(GARRA_FECHADA);
-    delay(1000);
-    moverGarra(GARRA_ABERTA);
-    delay(500);
-
-    recolherDaLinha(linhaCentro);
+      byte vermelho;
+      byte verde;
+      bool valida = lerCorNormalizadaMedia(vermelho, verde);
+      if (valida && classificarCorAtual(vermelho, verde, fundoAtualR,
+                                        fundoAtualG, referenciaR, referenciaG) == 'R') {
+        Serial.println(F("Vermelho confirmado no ponto: acionando a garra."));
+        moverGarra(GARRA_FECHADA);
+        delay(1000);
+        moverGarra(GARRA_ABERTA);
+        delay(500);
+      } else {
+        Serial.println(F("Ponto sem vermelho confirmado: corte cancelado."));
+      }
+      recolherDaLinha(linhaCentro);
+    } else {
+      Serial.println(F("Sem grupo vermelho suficiente: nenhum corte."));
+      recolherDaLinha(TOTAL_LINHAS_GRADE - 1);
+    }
   } else {
-    Serial.println(F("Nenhuma area suspeita conectada foi encontrada."));
     recolherDaLinha(TOTAL_LINHAS_GRADE - 1);
   }
 
-  Serial.println(F("=== FIM DA INVESTIGACAO ==="));
-
+  Serial.println(F("=== FIM DA VARREDURA ==="));
   cicloEmExecucao = false;
+}
+
+void executarInvestigacaoAutomatica() {
+  executarVarreduraCor(true);
 }
 
 byte anguloDaColuna(byte coluna) {
@@ -1410,8 +1573,8 @@ void estimarPecioloPelaMascara() {
   pecioloLocalizado = false;
 
   // O peciolo pode ser fino demais para aparecer na mascara. Localizamos a
-  // primeira linha ocupada da lamina, calculamos seu centro horizontal e
-  // extrapolamos a posicao para cima da grade.
+  // primeira linha ocupada da lamina e usamos seu centro horizontal para
+  // estimar a coluna da pose nominal de corte.
   int primeiraLinha = -1;
   byte quantidade = 0;
   unsigned int somaColunas = 0;
@@ -1454,7 +1617,7 @@ void estimarPecioloPelaMascara() {
     Serial.println(F("Aviso: borda larga; a coluna do peciolo e uma estimativa."));
   }
 
-  Serial.print(F("Candidato a peciolo -> acima da linha 0 | altura inicial: "));
+  Serial.print(F("Candidato a peciolo -> pose nominal | altura: "));
   Serial.print(POSE_PECIOLO_VIRTUAL.altura);
   Serial.print(F(" cm | coluna media: "));
   Serial.print(colunaPeciolo, 1);
@@ -1737,8 +1900,9 @@ void imprimirAjuda() {
   Serial.println(F("b - varrer e registrar o fundo sem folha"));
   Serial.println(F("B - apagar o fundo salvo na EEPROM"));
   Serial.println(F("c - varrer a folha saudavel e criar a mascara"));
+  Serial.println(F("d - diagnostico verde/vermelha sem corte e sem salvar"));
   Serial.println(F("l - fazer uma leitura RGB sem movimentar o braco"));
-  Serial.println(F("m - mostrar a mascara 6x6 e o candidato a peciolo"));
+  Serial.println(F("m - mostrar a mascara 7x7 e o candidato a peciolo"));
   Serial.println(F("k - posicionar no peciolo para ajuste, sem cortar"));
   Serial.println(F("j - executar somente um pulso de aproximacao do carrinho"));
   Serial.println(F("J - executar somente um pulso manual de re"));
